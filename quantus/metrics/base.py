@@ -811,7 +811,8 @@ class BatchedMetric(Metric):
         )
 
         n_batches = self.get_number_of_batches(arr=x, batch_size=batch_size)
-        self.last_results = [None for _ in range(n_batches)]
+        #self.last_results = [None for _ in range(n_batches)]
+        self.last_results = []
         # We use a tailing underscore to prevent confusion with the passed parameters.
         # TODO: rename kwargs of __call__() method accordingly or else this still will be confusing.
         for x_batch_, y_batch_, a_batch_, s_batch_ in batch_generator:

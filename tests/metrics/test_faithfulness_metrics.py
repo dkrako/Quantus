@@ -1067,6 +1067,7 @@ def test_pixel_flipping(
                 "init": {
                     "perturb_baseline": "mean",
                     "patch_size": 7,
+                    "n_steps": 5,
                     "normalise": True,
                     "order": "morf",
                     "disable_warnings": False,
@@ -1089,6 +1090,7 @@ def test_pixel_flipping(
                 "init": {
                     "perturb_baseline": "mean",
                     "patch_size": 7,
+                    "n_steps": 5,
                     "normalise": True,
                     "order": "random",
                     "disable_warnings": True,
@@ -1111,6 +1113,7 @@ def test_pixel_flipping(
                 "init": {
                     "perturb_baseline": "mean",
                     "patch_size": 7,
+                    "n_steps": 5,
                     "normalise": True,
                     "order": "morf",
                     "disable_warnings": True,
@@ -1131,6 +1134,7 @@ def test_pixel_flipping(
             {
                 "a_batch_generate": False,
                 "init": {
+                    "n_steps": 5,
                     "disable_warnings": True,
                     "display_progressbar": False,
                 },
@@ -1144,6 +1148,7 @@ def test_pixel_flipping(
             {
                 "init": {
                     "perturb_baseline": "mean",
+                    "n_steps": 5,
                     "patch_size": 7,
                     "normalise": True,
                     "order": "morf",
@@ -1165,6 +1170,7 @@ def test_pixel_flipping(
             {
                 "init": {
                     "perturb_baseline": "mean",
+                    "n_steps": 5,
                     "patch_size": 7,
                     "normalise": True,
                     "order": "morf",

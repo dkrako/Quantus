@@ -91,7 +91,6 @@ def get_baseline_value(
 
     """
 
-    kwargs["return_shape"] = return_shape
     if isinstance(value, (float, int)):
         return np.full(return_shape, value)
     elif isinstance(value, np.ndarray):
@@ -106,7 +105,7 @@ def get_baseline_value(
                 )
             )
     elif isinstance(value, str):
-        fill_dict = get_baseline_dict(arr, patch, **kwargs)
+        fill_dict = get_baseline_dict(arr, patch, return_shape=return_shape, **kwargs)
         if value.lower() == "random":
             raise ValueError(
                 "'random' as a choice for 'perturb_baseline' is deprecated and has been removed from "
@@ -124,7 +123,10 @@ def get_baseline_value(
 
 
 def get_baseline_dict(
-    arr: np.ndarray, patch: Optional[np.ndarray] = None, **kwargs
+    arr: np.ndarray, patch: Optional[np.ndarray] = None,
+    uniform_low: Optional[float] = 0.0,
+    uniform_high: Optional[float] = 1.0,
+    return_shape: Optional[Any] = None,  # TODO: set correct type for return_shape
 ) -> dict:
     """
     Make a dictionary of baseline approaches depending on the input x (or patch of input).
@@ -147,9 +149,9 @@ def get_baseline_dict(
     fill_dict = {
         "mean": float(arr.mean()),
         "uniform": np.random.uniform(
-            low=kwargs.get("uniform_low", 0.0),
-            high=kwargs.get("uniform_high", 1.0),
-            size=kwargs["return_shape"],
+            low=uniform_low,
+            high=uniform_high,
+            size=return_shape,
         ),
         "black": float(arr.min()),
         "white": float(arr.max()),

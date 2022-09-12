@@ -9,7 +9,7 @@
 import copy
 import random
 import warnings
-from typing import Any, Sequence, Tuple, Union
+from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -27,11 +27,35 @@ from .utils import (
 )
 
 
+def perturb_batch_on_indices(
+        arr: np.ndarray,
+        indices: np.ndarray,
+        perturb_func: Callable,
+        inplace: bool = False,
+        **kwargs,
+) -> None:
+    """ perturbation of complete batch """
+    assert arr.shape[0] == len(indices), (
+        "arr and indices need same number of batches"
+    )
+
+    if not inplace:
+        arr = arr.copy()
+
+    for i in range(len(arr)):
+        arr[i] = perturb_func(arr=arr[i], indices=indices[i][1:], **kwargs)
+
+    if not inplace:
+        return arr
+
+
 def baseline_replacement_by_indices(
     arr: np.array,
     indices: Union[int, Sequence[int], Tuple[np.array]],
     indexed_axes: Sequence[int],
     perturb_baseline: Union[float, int, str, np.array],
+    expand: bool = True,
+    patch_shape: Optional[Tuple[int, ...]] = None,
     **kwargs,
 ) -> np.array:
     """
@@ -56,8 +80,13 @@ def baseline_replacement_by_indices(
     arr_perturbed: np.ndarray
          The array which some of its indices have been perturbed.
     """
-    indices = expand_indices(arr, indices, indexed_axes)
-    baseline_shape = get_leftover_shape(arr, indexed_axes)
+    if expand:
+        indices = expand_indices(arr, indices, indexed_axes)
+
+    if patch_shape is not None:
+        baseline_shape = patch_shape
+    else:
+        baseline_shape = get_leftover_shape(arr, indexed_axes)
 
     arr_perturbed = copy.copy(arr)
 
