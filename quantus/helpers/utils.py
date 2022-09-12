@@ -332,13 +332,17 @@ def blur_at_indices(
 
 
 def create_patch_slice(
-    patch_size: Union[int, Sequence[int]], coords: Sequence[int]
+    patch_size: Union[int, Sequence[int]],
+    coords: Sequence[int],
+    expand_batch_dim: bool = False,
+
 ) -> Tuple[np.ndarray]:
     """
     Create a patch slice from patch size and coordinates.
 
     Parameters
     ----------
+    coords: top left coordinates
 
     """
 
@@ -363,9 +367,13 @@ def create_patch_slice(
     patch_size = tuple(int(patch_size_dim) for patch_size_dim in patch_size)
 
     patch_slice = [
-        np.arange(coord, coord + patch_size_dim)
+        slice(coord, coord + patch_size_dim)
         for coord, patch_size_dim in zip(coords, patch_size)
     ]
+
+    # Prepend empty slice so that all patches have a batch dimension.
+    if expand_batch_dim:
+        patch_slice = [slice(None), *patch_slice]
 
     return tuple(patch_slice)
 
@@ -669,9 +677,10 @@ def expand_indices(
             expanded_indices, tuple([arr.shape[i] for i in indexed_axes])
         )
 
+    #breakpoint()
     # Handle case of 1D indices.
-    if not np.array(expanded_indices).ndim > 1:
-        expanded_indices = [np.array(expanded_indices)]
+    #if not np.array(expanded_indices).ndim > 1:
+    #    expanded_indices = [np.array(expanded_indices)]
 
     # Cast to list so item assignment works.
     expanded_indices = list(expanded_indices)

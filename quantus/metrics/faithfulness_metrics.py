@@ -1,12 +1,13 @@
 """This module contains the collection of faithfulness metrics to evaluate attribution-based explanations of neural network models."""
 import itertools
 import warnings
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 from tqdm import tqdm
 
 from .base import PerturbationMetric
+from .base import BatchedPerturbationMetric
 from ..helpers import asserts
 from ..helpers import plotting
 from ..helpers import utils
@@ -15,8 +16,10 @@ from ..helpers.asserts import attributes_check
 from ..helpers.model_interface import ModelInterface
 from ..helpers.normalise_func import normalise_by_negative
 from ..helpers.similar_func import correlation_pearson, correlation_spearman, mse
+from ..helpers.perturb_func import perturb_batch_on_indices
 from ..helpers.perturb_func import baseline_replacement_by_indices
 from ..helpers.perturb_func import noisy_linear_imputation
+from ..types import Patch
 
 
 class FaithfulnessCorrelation(PerturbationMetric):
@@ -1537,7 +1540,7 @@ class PixelFlipping(PerturbationMetric):
         return [utils.calculate_auc(np.array(i)) for i in self.all_results]
 
 
-class RegionPerturbation(PerturbationMetric):
+class RegionPerturbation(BatchedPerturbationMetric):
     """
 
     Implementation of Region Perturbation by Samek et al., 2015.
@@ -1567,7 +1570,7 @@ class RegionPerturbation(PerturbationMetric):
         self,
         patch_size: int = 8,
         order: str = "morf",
-        regions_evaluation: int = 100,
+        n_steps: int = 100,
         abs: bool = False,
         normalise: bool = True,
         normalise_func: Optional[Callable[[np.ndarray], np.ndarray]] = None,
@@ -1622,6 +1625,7 @@ class RegionPerturbation(PerturbationMetric):
             normalise=normalise,
             normalise_func=normalise_func,
             normalise_func_kwargs=normalise_func_kwargs,
+            n_steps=n_steps,
             perturb_func=perturb_func,
             perturb_func_kwargs=perturb_func_kwargs,
             softmax=softmax,
@@ -1634,7 +1638,6 @@ class RegionPerturbation(PerturbationMetric):
         # Save metric-specific attributes.
         self.patch_size = patch_size
         self.order = order.lower()
-        self.regions_evaluation = regions_evaluation
 
         # Asserts and warnings.
         asserts.assert_attributions_order(order=self.order)
@@ -1660,11 +1663,12 @@ class RegionPerturbation(PerturbationMetric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        batch_size: int = 64,
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
         explain_func_kwargs: Optional[Dict[str, Any]] = None,
         model_predict_kwargs: Optional[Dict[str, Any]] = None,
-        softmax: bool = False,
+        softmax: bool = True,
         device: Optional[str] = None,
         **kwargs,
     ) -> List[float]:
@@ -1688,6 +1692,7 @@ class RegionPerturbation(PerturbationMetric):
             default=None.
         model_predict_kwargs (dict, optional): Keyword arguments to be passed to the model's predict method, default = {}.
         softmax (boolean): Indicates wheter to use softmax probabilities or logits in model prediction, default=False.
+        batch_size (int): batch size for evaluation, default = 64.
 
         Returns
         -------
@@ -1730,117 +1735,332 @@ class RegionPerturbation(PerturbationMetric):
             softmax=softmax,
             device=device,
             model_predict_kwargs=model_predict_kwargs,
+            batch_size=batch_size,
+            patch_size=self.patch_size,
+            order=self.order,
             **kwargs,
         )
 
-    def evaluate_instance(
-        self,
-        model: ModelInterface,
-        x: np.ndarray,
-        y: np.ndarray,
-        a: np.ndarray,
-        s: np.ndarray,
+    def process_batch(
+            self,
+            model: ModelInterface,
+            x_batch: np.ndarray,
+            y_batch: np.ndarray,
+            a_batch: np.ndarray,
+            s_batch: Optional[np.ndarray],
+            perturb_func: Callable,
+            perturb_func_kwargs: Optional[Dict],
+            n_steps: int,
+            patch_size: int,
+            order: str,
     ):
-        # Predict on input.
-        x_input = model.shape_input(x, x.shape, channel_first=True)
-        y_pred = float(model.predict(x_input)[:, y])
+        # TODO: use check function for this, but maybe already in __init__
+        if perturb_func is None:
+            raise ValueError("perturb_func must not be None")
+        if perturb_func_kwargs is None:
+            perturb_func_kwargs = {}
 
-        patches = []
-        x_perturbed = x.copy()
+        # create array for scores of each perturbation step
+        batch_size = x_batch.shape[0]
+        scores = np.zeros((batch_size, n_steps)) * np.nan
+
+        # Predict on original unperturbed input x.
+        # TODO: do this only if difference-flag is True
+        x_input = model.shape_input(
+            x=x_batch,
+            shape=x_batch.shape,
+            channel_first=True,
+            batched=True,
+        )
+        y_batch_pred = model.predict(x=x_input)
+
+        # create generator for perturbed batches
+        perturbation_generator = self.generate_perturbed_batches(
+            x_batch=x_batch,
+            a_batch=a_batch,
+            n_steps=n_steps,
+            patch_size=patch_size,
+            order=order,
+            perturb_func=perturb_func,
+            perturb_func_kwargs=perturb_func_kwargs,
+        )
+
+        for step, x_batch_perturbed in enumerate(perturbation_generator):
+
+            # Predict on perturbed input x.
+            x_perturb = model.shape_input(
+                x=x_batch_perturbed,
+                shape=x_batch.shape,
+                channel_first=True,
+                batched=True,
+            )
+
+            y_batch_pred_perturb = model.predict(x=x_perturb)
+
+            scores[:, step] = self.calculate_score(
+                y_batch=y_batch,
+                y_batch_pred=y_batch_pred,
+                y_batch_pred_perturb=y_batch_pred_perturb,
+            )
+
+        return scores
+
+    def calculate_score(self, y_batch, y_batch_pred, y_batch_pred_perturb):
+        n_instances = y_batch.shape[0]
+        score = np.zeros(n_instances) * np.nan
+
+        # TODO: get rid of for loop
+        iterator = zip(y_batch, y_batch_pred_perturb)
+        for ix, (y, y_pred_perturb) in enumerate(iterator):
+            y_pred_perturb = float(y_pred_perturb[y])
+            y_pred = float(y_batch_pred[ix, y])
+            # TODO: flag difference output
+            #score[ix] = y_pred - y_pred_perturb
+            score[ix] = y_pred_perturb
+        return score
+
+    def generate_perturbed_batches(
+            self,
+            x_batch: np.ndarray,
+            a_batch: np.ndarray,
+            n_steps: int,
+            patch_size: int,
+            order: str,
+            perturb_func: Callable,
+            perturb_func_kwargs: Dict[str, Any],
+    ) -> Iterator[np.ndarray]:
+
+        patches_batch, pad_width, patch_shape = self.get_ordered_patches(
+            x_batch=x_batch,
+            a_batch=a_batch,
+            patch_size=patch_size,
+            order=order,
+            max_patches=n_steps,
+            overlapping=False,
+            return_indices=False,
+        )
+
+        # TODO: assert max_patches == n_steps
+
+        # Increasingly perturb the input and store the decrease in function value.
+        x_batch_perturbed = x_batch.copy()
+        x_batch_perturbed_last = x_batch_perturbed.copy()
+        for step in range(n_steps):
+
+            # Select patches of current step for each instance in batch.
+            # TODO: There will be an IndexError raised if there's an instance for which
+            # there are less patches available than desired steps. Decide what to do then.
+            patches_batch_step = [
+                patches_instance[step] for patches_instance in patches_batch
+            ]
+            # Pad x_perturbed. The mode should probably depend on the used perturb_func?
+            pad_width = patch_size - 1
+            padded_axes = list(range(2, x_batch.ndim))
+            x_perturbed_pad = utils._pad_array(
+                x_batch_perturbed, pad_width, mode="edge", padded_axes=padded_axes,
+            )
+
+            # create indices from patch
+            #patch_batch_mask = np.zeros(x_perturbed_pad.shape, dtype=bool)
+            #for instance_id, patch in enumerate(patches_batch_step):
+            #    patch_instance = ([instance_id], *patch[1:])
+            #
+            #    # TODO: do this more efficiently
+            #    import itertools
+            #    for patch_coord in itertools.product(*patch_instance):
+            #        patch_batch_mask[patch_coord] = True
+            #patch_batch_indices = np.where(patch_batch_mask)
+
+            # create indices from patch
+
+            '''
+            patches_indices_batch = []
+            for instance_id, patch in enumerate(patches_batch_step):
+                patch_instance_mask = np.zeros(x_perturbed_pad[0].shape, dtype=bool)
+
+                # TODO: do this more efficiently
+                import itertools
+                for patch_coord in itertools.product(*patch[1:]):
+                    patch_instance_mask[patch_coord] = True
+
+                patch_instance_indices = np.where(patch_instance_mask)
+                patches_indices_batch.append(patch_instance_indices)
+            '''
+
+            #patches_batch_step = [(slice(None), *patch[1:]) for patch in patches_batch_step]
+
+            # Perturb complete batch inplace.
+            x_perturbed_pad = perturb_batch_on_indices(
+                arr=x_perturbed_pad,
+                indices=patches_batch_step,
+                perturb_func=self.perturb_func,
+                indexed_axes=list(range(0, x_batch.ndim-1)),
+                expand=False,
+                patch_shape=patch_shape,
+                **self.perturb_func_kwargs,
+            )
+
+            # Remove Padding
+            x_batch_perturbed = utils._unpad_array(
+                x_perturbed_pad, pad_width, padded_axes=padded_axes,
+            )
+
+            #asserts.assert_perturbation_caused_change(
+            #    x=x_batch_perturbed_last, x_perturbed=x_batch_perturbed)
+            x_batch_perturbed_last = x_batch_perturbed.copy()
+
+            yield x_batch_perturbed
+
+    def get_ordered_patches(
+            self,
+            x_batch: np.ndarray,
+            a_batch: np.ndarray,
+            patch_size: int,
+            max_patches: int,
+            order: str,
+            overlapping: bool = False,
+            return_indices: bool = False,  # This doesn't properly work yet.
+                                           # TODO: either fix or remove this!
+    ) -> Tuple[List[List[Patch]], int]:
 
         # Pad input and attributions. This is needed to allow for any patch_size.
-        pad_width = self.patch_size - 1
-        x_pad = utils._pad_array(x, pad_width, mode="constant", padded_axes=self.a_axes)
-        a_pad = utils._pad_array(a, pad_width, mode="constant", padded_axes=self.a_axes)
+        pad_width = patch_size - 1
+        padded_axes = list(range(2, x_batch.ndim))
+        x_pad = utils._pad_array(x_batch, pad_width, mode="constant", padded_axes=padded_axes)
+        a_pad = utils._pad_array(a_batch, pad_width, mode="constant", padded_axes=padded_axes)
 
-        # Create patches across whole input shape and aggregate attributions.
-        att_sums = []
+        # Create patches across whole input shape. Patches don't have batch axis.
+        patches = []
+        # omit batch and channel dimension when padding
         axis_iterators = [
-            range(pad_width, x_pad.shape[axis] - pad_width) for axis in self.a_axes
+            range(pad_width, x_pad.shape[axis] - pad_width) for axis in padded_axes
         ]
+
+        # Add channel dimension to axis iterators
+        # TODO: add boolean switch for this
+        axis_iterators.insert(0, range(x_batch.shape[1]))
+
+        # Expand patch size. Add channel dimension.
+        # If patch size is an integer, expand to further data shape.
+        if isinstance(patch_size, int):
+            patch_shape = tuple(patch_size for _ in range(x_batch.ndim - 2))
+        else:
+            patch_shape = patch_size
+        patch_shape = (1, *patch_shape)
+
         for top_left_coords in itertools.product(*axis_iterators):
             # Create slice for patch.
-            patch_slice = utils.create_patch_slice(
-                patch_size=self.patch_size,
+            patch = utils.create_patch_slice(
+                patch_size=patch_shape,
                 coords=top_left_coords,
+                expand_batch_dim=True,
             )
+            patches.append(patch)
 
-            # Sum attributions for patch.
-            att_sums.append(
-                a_pad[utils.expand_indices(a_pad, patch_slice, self.a_axes)].sum()
+        # Sum attributions for each patch (on instance axis).
+        batch_size = x_batch.shape[0]
+        a_sum_patches = np.zeros((batch_size, len(patches)))
+        for patch_id, patch in enumerate(patches):
+            # Add batch dimension to patch.
+            a_patch = a_pad[patch]
+            # Take sum on all axes after batch axis.
+            a_sum_patch = np.sum(
+                a_patch, axis=tuple(range(1, a_patch.ndim)),
             )
-            patches.append(patch_slice)
+            # TODO: what are we doing here?
+            try:
+                a_sum_patches[:, patch_id] = a_sum_patch.squeeze(axis=-1)
+            except ValueError as e:
+                a_sum_patches[:, patch_id] = a_sum_patch
 
-        if self.order == "random":
-            # Order attributions randomly.
-            order = np.arange(len(patches))
-            np.random.shuffle(order)
+        # Order attributions by selected method
+        if order == "random":
+            # Create random order for all instances separately.
+            patch_order_idx_batch = np.zeros((batch_size, len(patches)), dtype=int)
+            for instance_id in range(batch_size):
+                # Order attributions randomly for each instance.
+                patch_order_idx_instance = np.arange(len(patches))
+                np.random.shuffle(patch_order_idx_instance)
+                patch_order_idx_batch[instance_id, :] = patch_order_idx_instance
 
-        elif self.order == "morf":
+        elif order == "morf":
             # Order attributions according to the most relevant first.
-            order = np.argsort(att_sums)[::-1]
+            patch_order_idx_batch = np.argsort(a_sum_patches)[:, ::-1]
 
-        elif self.order == "lerf":
+        elif order == "lerf":
             # Order attributions according to the least relevant first.
-            order = np.argsort(att_sums)
+            patch_order_idx_batch = np.argsort(a_sum_patches)
 
         else:
             raise ValueError(
                 "order must be in ['random', 'morf', 'lerf'] but is: {self.order}"
             )
 
-        # Create ordered list of patches.
-        ordered_patches = [patches[p] for p in order]
+        # Create ordered list of patches for each instance in batch.
+        patches_batch = [
+            [
+                patches[patch_order_idx_instance]
+                for patch_order_idx_instance in patch_order_idx_batch[instance_id]
+            ]
+            for instance_id in range(batch_size)
+        ]
 
-        # Remove overlapping patches
-        blocked_mask = np.zeros(x_pad.shape, dtype=bool)
-        ordered_patches_no_overlap = []
-        for patch_slice in ordered_patches:
-            patch_mask = np.zeros(x_pad.shape, dtype=bool)
-            patch_mask[
-                utils.expand_indices(patch_mask, patch_slice, self.a_axes)
-            ] = True
-            # patch_mask_exp = utils.expand_indices(patch_mask, patch_slice, self.a_axes)
-            # patch_mask[patch_mask_exp] = True
-            intersected = blocked_mask & patch_mask
-
-            if not intersected.any():
-                ordered_patches_no_overlap.append(patch_slice)
-                blocked_mask = blocked_mask | patch_mask
-
-            if len(ordered_patches_no_overlap) >= self.regions_evaluation:
-                break
-
-        # Increasingly perturb the input and store the decrease in function value.
-        sub_results = [None for _ in range(len(ordered_patches_no_overlap))]
-        for patch_id, patch_slice in enumerate(ordered_patches_no_overlap):
-            # Pad x_perturbed. The mode should probably depend on the used perturb_func?
-            x_perturbed_pad = utils._pad_array(
-                x_perturbed, pad_width, mode="edge", padded_axes=self.a_axes
+        # Remove overlapping patches if requested.
+        if not overlapping:
+            patches_batch = self.remove_overlapping_patches(
+                patches_batch=patches_batch,
+                x_shape=x_pad.shape,
+                max_patches=max_patches,
             )
 
-            # Perturb.
-            x_perturbed_pad = self.perturb_func(
-                arr=x_perturbed_pad,
-                indices=patch_slice,
-                indexed_axes=self.a_axes,
-                **self.perturb_func_kwargs,
+        # Limit returned patches to max_patches
+        patches_batch = [
+            patches_instance[:max_patches] for patches_instance in patches_batch
+        ]
+
+        # Return patches as arrays of indices if requested.
+        if return_indices:
+            patches_batch = utils.transform_patches_to_indices(
+                patches=patches_batch, arr_shape=x_batch.shape,
             )
 
-            # Remove Padding
-            x_perturbed = utils._unpad_array(
-                x_perturbed_pad, pad_width, padded_axes=self.a_axes
-            )
+        return patches_batch, pad_width, patch_shape
 
-            asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
+    def remove_overlapping_patches(
+            self,
+            patches_batch: List[List[Patch]],
+            x_shape: Tuple[int, ...],
+            max_patches: int,
+    ) -> List[List[Patch]]:
 
-            # Predict on perturbed input x and store the difference from predicting on unperturbed input.
-            x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
-            y_pred_perturb = float(model.predict(x_input)[:, y])
+        blocked_mask = np.zeros(x_shape, dtype=bool)
+        batch_size = len(patches_batch)
+        patches_batch_no_overlap = [[] for _ in range(batch_size)]
 
-            sub_results[patch_id] = y_pred - y_pred_perturb
+        for instance_id, patches_instance in enumerate(patches_batch):
 
-        return sub_results
+            for patch in patches_instance:
+                # Create patch mask for current patch.
+                patch_mask = np.zeros(x_shape[1:], dtype=bool)
+                patch_mask[patch[1:]] = True
+
+                # Check for intersections and add patch if there are none
+                intersected = blocked_mask[instance_id] & patch_mask
+                if not intersected.any():
+                    patches_batch_no_overlap[instance_id].append(patch)
+                    blocked_mask[instance_id] = blocked_mask[instance_id] | patch_mask
+
+                if len(patches_batch_no_overlap[instance_id]) >= max_patches:
+                    break
+
+            # fill up patch slices with patch slice of last iteration
+            # if there are not enough non-overlapping patches
+            # or alternative: raise error as this should never be the case
+            # TODO: check if this is acceptable
+            while len(patches_batch_no_overlap[instance_id]) < max_patches:
+                patches_batch_no_overlap[instance_id].append([])
+
+        return patches_batch_no_overlap
 
     def custom_preprocess(
         self,
