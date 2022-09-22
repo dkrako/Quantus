@@ -16,10 +16,14 @@ from ..helpers.asserts import attributes_check
 from ..helpers.model_interface import ModelInterface
 from ..helpers.normalise_func import normalise_by_negative
 from ..helpers.similar_func import correlation_pearson, correlation_spearman, mse
-from ..helpers.perturb_func import perturb_batch_on_indices
+from ..helpers.perturb_func import perturb_batch
 from ..helpers.perturb_func import baseline_replacement_by_indices
 from ..helpers.perturb_func import noisy_linear_imputation
-from ..types import Patch
+
+
+#from ..types import Patch
+from typing import Sequence, Tuple
+Patch = Tuple[Sequence[int], ...]
 
 
 class FaithfulnessCorrelation(PerturbationMetric):
@@ -1625,7 +1629,6 @@ class RegionPerturbation(BatchedPerturbationMetric):
             normalise=normalise,
             normalise_func=normalise_func,
             normalise_func_kwargs=normalise_func_kwargs,
-            n_steps=n_steps,
             perturb_func=perturb_func,
             perturb_func_kwargs=perturb_func_kwargs,
             softmax=softmax,
@@ -1636,6 +1639,7 @@ class RegionPerturbation(BatchedPerturbationMetric):
         )
 
         # Save metric-specific attributes.
+        self.n_steps = n_steps
         self.patch_size = patch_size
         self.order = order.lower()
 
@@ -1736,6 +1740,7 @@ class RegionPerturbation(BatchedPerturbationMetric):
             device=device,
             model_predict_kwargs=model_predict_kwargs,
             batch_size=batch_size,
+            n_steps=self.n_steps,
             patch_size=self.patch_size,
             order=self.order,
             **kwargs,
@@ -1890,14 +1895,14 @@ class RegionPerturbation(BatchedPerturbationMetric):
             #patches_batch_step = [(slice(None), *patch[1:]) for patch in patches_batch_step]
 
             # Perturb complete batch inplace.
-            x_perturbed_pad = perturb_batch_on_indices(
+            x_perturbed_pad = perturb_batch(
                 arr=x_perturbed_pad,
                 indices=patches_batch_step,
-                perturb_func=self.perturb_func,
+                perturb_func=perturb_func,
                 indexed_axes=list(range(0, x_batch.ndim-1)),
                 expand=False,
                 patch_shape=patch_shape,
-                **self.perturb_func_kwargs,
+                **perturb_func_kwargs,
             )
 
             # Remove Padding
@@ -2083,7 +2088,8 @@ class RegionPerturbation(BatchedPerturbationMetric):
         s_batch: np.ndarray,
     ) -> Tuple[ModelInterface, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # This metric returns a dict of lists, not a list of lists.
-        self.last_results = {k: self.last_results[k] for k in range(len(x_batch))}
+        #self.last_results = {k: self.last_results[k] for k in range(len(x_batch))}
+        pass
 
     @property
     def get_auc_score(self):
@@ -2392,7 +2398,7 @@ class Selectivity(PerturbationMetric):
         ]
 
 
-class SensitivityN(PerturbationMetric):
+class SensitivityN(BatchedPerturbationMetric):
     """
     Implementation of Sensitivity-N test by Ancona et al., 2019.
 
