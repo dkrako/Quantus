@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 from tqdm import tqdm
 
+from .base import BatchedPerturbationMetric
 from .base import PerturbationMetric
 from ..helpers import asserts
 from ..helpers import similar_func
@@ -15,14 +16,13 @@ from ..helpers.asserts import attributes_check
 from ..helpers.model_interface import ModelInterface
 from ..helpers.norm_func import fro_norm
 from ..helpers.normalise_func import normalise_by_negative
-from ..helpers.perturb_func import (
-    gaussian_noise,
-    uniform_noise,
-    translation_x_direction,
-)
+from ..helpers.perturb_func import perturb_batch
+from ..helpers.perturb_func import gaussian_noise
+from ..helpers.perturb_func import uniform_noise
+from ..helpers.perturb_func import translation_x_direction
 
 
-class LocalLipschitzEstimate(PerturbationMetric):
+class LocalLipschitzEstimate(BatchedPerturbationMetric):
     """
     Implementation of the Local Lipschitz Estimated (or Stability) test by Alvarez-Melis et al., 2018a, 2018b.
 
@@ -43,24 +43,16 @@ class LocalLipschitzEstimate(PerturbationMetric):
     @attributes_check
     def __init__(
         self,
-        similarity_func: Optional[
-            Callable
-        ] = None,  # TODO: specify expected function signature
-        norm_numerator: Optional[
-            Callable
-        ] = None,  # TODO: specify expected function signature
-        norm_denominator: Optional[
-            Callable
-        ] = None,  # TODO: specify expected function signature
+        similarity_func: Optional[Callable] = None,
+        norm_numerator: Optional[Callable] = None,
+        norm_denominator: Optional[Callable] = None,
         nr_samples: int = 200,
         abs: bool = False,
         normalise: bool = True,
         normalise_func: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         normalise_func_kwargs: Optional[Dict[str, Any]] = None,
-        output_func: Optional[
-            Callable
-        ] = None,  # TODO: specify expected function signature
-        perturb_func: Callable = None,  # TODO: specify expected function signature
+        output_func: Optional[Callable] = None,
+        perturb_func: Callable = None,
         perturb_mean: float = 0.0,
         perturb_std: float = 0.1,
         perturb_func_kwargs: Optional[Dict[str, Any]] = None,
@@ -163,6 +155,7 @@ class LocalLipschitzEstimate(PerturbationMetric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        batch_size: int = 64,
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
         explain_func_kwargs: Optional[Dict[str, Any]] = None,
@@ -233,35 +226,51 @@ class LocalLipschitzEstimate(PerturbationMetric):
             softmax=softmax,
             device=device,
             model_predict_kwargs=model_predict_kwargs,
+            batch_size=batch_size,
+            nr_samples=self.nr_samples,
+            similarity_func=self.similarity_func,
+            norm_numerator=self.norm_numerator,
+            norm_denominator=self.norm_denominator,
             **kwargs,
         )
 
-    def evaluate_instance(
-        self,
-        model: ModelInterface,
-        x: np.ndarray,
-        y: np.ndarray,
-        a: np.ndarray,
-        s: np.ndarray,
+    def process_batch(
+            self,
+            model: ModelInterface,
+            x_batch: np.ndarray,
+            y_batch: np.ndarray,
+            a_batch: np.ndarray,
+            s_batch: Optional[np.ndarray],
+            perturb_func: Callable,
+            perturb_func_kwargs: Optional[Dict],
+            nr_samples: int,
+            similarity_func: Callable,
+            norm_numerator: Callable,
+            norm_denominator: Callable,
     ):
-        similarity_max = 0.0
-        for i in range(self.nr_samples):
+        n_instances = x_batch.shape[0]
+        similarities = np.zeros((n_instances, nr_samples)) * np.nan
+        for step_id in range(nr_samples):
 
             # Perturb input.
-            x_perturbed = self.perturb_func(
-                arr=x,
-                indices=np.arange(0, x.size),
-                indexed_axes=np.arange(0, x.ndim),
-                **self.perturb_func_kwargs,
+            x_perturbed = perturb_batch(
+                perturb_func=perturb_func,
+                arr=x_batch,
+                **perturb_func_kwargs,
             )
-            x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
-            asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
+            x_input = model.shape_input(
+                x=x_perturbed,
+                shape=x_batch.shape,
+                channel_first=True,
+                batched=True,
+            )
+            asserts.assert_perturbation_caused_change(x=x_batch, x_perturbed=x_perturbed)
 
             # Generate explanation based on perturbed input x.
             a_perturbed = self.explain_func(
                 model=model.get_model(),
                 inputs=x_input,
-                targets=y,
+                targets=y_batch,
                 **self.explain_func_kwargs,
             )
 
@@ -274,16 +283,19 @@ class LocalLipschitzEstimate(PerturbationMetric):
             if self.abs:
                 a_perturbed = np.abs(a_perturbed)
 
-                # Measure similarity.
-                similarity = self.similarity_func(
-                    a=a.flatten(),
-                    b=a_perturbed.flatten(),
-                    c=x.flatten(),
-                    d=x_perturbed.flatten(),
+            # Measure similarity for each instance separately.
+            for instance_id in range(n_instances):
+                similarity = similarity_func(
+                    a=a_batch[instance_id].flatten(),
+                    b=a_perturbed[instance_id].flatten(),
+                    c=x_batch[instance_id].flatten(),
+                    d=x_perturbed[instance_id].flatten(),
+                    norm_numerator=norm_numerator,
+                    norm_denominator=norm_denominator,
                 )
-                similarity_max = max(similarity, similarity_max)
+                similarities[instance_id, step_id] = similarity
 
-        return similarity_max
+        return np.nanmax(similarities, axis=1)
 
     def custom_preprocess(
         self,
@@ -300,7 +312,7 @@ class LocalLipschitzEstimate(PerturbationMetric):
         return model, x_batch, y_batch, a_batch, s_batch
 
 
-class MaxSensitivity(PerturbationMetric):
+class MaxSensitivity(BatchedPerturbationMetric):
     """
     Implementation of max-sensitivity by Yeh at el., 2019.
 
@@ -442,6 +454,7 @@ class MaxSensitivity(PerturbationMetric):
         model_predict_kwargs: Optional[Dict[str, Any]] = None,
         softmax: bool = False,
         device: Optional[str] = None,
+        batch_size: int = 64,
         **kwargs,
     ) -> List[float]:
         """
@@ -506,54 +519,75 @@ class MaxSensitivity(PerturbationMetric):
             softmax=softmax,
             device=device,
             model_predict_kwargs=model_predict_kwargs,
+            batch_size=batch_size,
+            nr_samples=self.nr_samples,
+            similarity_func=self.similarity_func,
+            norm_numerator=self.norm_numerator,
+            norm_denominator=self.norm_denominator,
             **kwargs,
         )
 
-    def evaluate_instance(
-        self,
-        model: ModelInterface,
-        x: np.ndarray,
-        y: np.ndarray,
-        a: np.ndarray,
-        s: np.ndarray,
+    def process_batch(
+            self,
+            model: ModelInterface,
+            x_batch: np.ndarray,
+            y_batch: np.ndarray,
+            a_batch: np.ndarray,
+            s_batch: Optional[np.ndarray],
+            perturb_func: Callable,
+            perturb_func_kwargs: Optional[Dict],
+            nr_samples: int,
+            similarity_func: Callable,
+            norm_numerator: Callable,
+            norm_denominator: Callable,
     ):
-        sensitivities_norm_max = 0.0
-        for _ in range(self.nr_samples):
+        n_instances = x_batch.shape[0]
+        similarities = np.zeros((n_instances, nr_samples)) * np.nan
+        for step_id in range(nr_samples):
 
             # Perturb input.
-            x_perturbed = self.perturb_func(
-                arr=x,
-                indices=np.arange(0, x.size),
-                indexed_axes=np.arange(0, x.ndim),
-                **self.perturb_func_kwargs,
+            x_perturbed = perturb_batch(
+                perturb_func=perturb_func,
+                arr=x_batch,
+                **perturb_func_kwargs,
             )
-            x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
-            asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
+            x_input = model.shape_input(
+                x=x_perturbed,
+                shape=x_batch.shape,
+                channel_first=True,
+                batched=True,
+            )
+            asserts.assert_perturbation_caused_change(x=x_batch, x_perturbed=x_perturbed)
 
             # Generate explanation based on perturbed input x.
             a_perturbed = self.explain_func(
                 model=model.get_model(),
                 inputs=x_input,
-                targets=y,
+                targets=y_batch,
                 **self.explain_func_kwargs,
             )
 
             if self.normalise:
-                a_perturbed = self.normalise_func(a_perturbed)
+                a_perturbed = self.normalise_func(
+                    a_perturbed,
+                    **self.normalise_func_kwargs,
+                )
 
             if self.abs:
                 a_perturbed = np.abs(a_perturbed)
 
-            # Measure sensitivity.
-            sensitivities = self.similarity_func(a=a.flatten(), b=a_perturbed.flatten())
-            numerator = self.norm_numerator(a=sensitivities)
-            denominator = self.norm_denominator(a=x.flatten())
-            sensitivities_norm = numerator / denominator
+            # Measure similarity for each instance separately.
+            for instance_id in range(n_instances):
+                sensitivities = similarity_func(
+                    a=a_batch[instance_id].flatten(),
+                    b=a_perturbed[instance_id].flatten(),
+                )
+                numerator = norm_numerator(a=sensitivities)
+                denominator = norm_denominator(a=x_batch[instance_id].flatten())
+                sensitivities_norm = numerator / denominator
+                similarities[instance_id, step_id] = sensitivities_norm
 
-            if sensitivities_norm > sensitivities_norm_max:
-                sensitivities_norm_max = sensitivities_norm
-
-        return sensitivities_norm_max
+        return np.nanmax(similarities, axis=1)
 
     def custom_preprocess(
         self,
@@ -570,7 +604,7 @@ class MaxSensitivity(PerturbationMetric):
         return model, x_batch, y_batch, a_batch, s_batch
 
 
-class AvgSensitivity(PerturbationMetric):
+class AvgSensitivity(BatchedPerturbationMetric):
     """
     Implementation of avg-sensitivity by Yeh at el., 2019.
 
@@ -710,6 +744,7 @@ class AvgSensitivity(PerturbationMetric):
         model_predict_kwargs: Optional[Dict[str, Any]] = None,
         softmax: bool = False,
         device: Optional[str] = None,
+        batch_size: int = 64,
         **kwargs,
     ) -> List[float]:
         """
@@ -775,55 +810,74 @@ class AvgSensitivity(PerturbationMetric):
             softmax=softmax,
             device=device,
             model_predict_kwargs=model_predict_kwargs,
+            nr_samples=self.nr_samples,
+            similarity_func=self.similarity_func,
+            norm_numerator=self.norm_numerator,
+            norm_denominator=self.norm_denominator,
             **kwargs,
         )
 
-    def evaluate_instance(
-        self,
-        model: ModelInterface,
-        x: np.ndarray,
-        y: np.ndarray,
-        a: np.ndarray,
-        s: np.ndarray,
+    def process_batch(
+            self,
+            model: ModelInterface,
+            x_batch: np.ndarray,
+            y_batch: np.ndarray,
+            a_batch: np.ndarray,
+            s_batch: Optional[np.ndarray],
+            perturb_func: Callable,
+            perturb_func_kwargs: Optional[Dict],
+            nr_samples: int,
+            similarity_func: Callable,
+            norm_numerator: Callable,
+            norm_denominator: Callable,
     ):
-        sub_results = [None for _ in range(self.nr_samples)]
-        for sample_idx in range(self.nr_samples):
+        n_instances = x_batch.shape[0]
+        similarities = np.zeros((n_instances, nr_samples)) * np.nan
+        for step_id in range(nr_samples):
 
             # Perturb input.
-            x_perturbed = self.perturb_func(
-                arr=x,
-                indices=np.arange(0, x.size),
-                indexed_axes=np.arange(0, x.ndim),
-                **self.perturb_func_kwargs,
+            x_perturbed = perturb_batch(
+                perturb_func=perturb_func,
+                arr=x_batch,
+                **perturb_func_kwargs,
             )
-            x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
-            asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
+            x_input = model.shape_input(
+                x=x_perturbed,
+                shape=x_batch.shape,
+                channel_first=True,
+                batched=True,
+            )
+            asserts.assert_perturbation_caused_change(x=x_batch, x_perturbed=x_perturbed)
 
             # Generate explanation based on perturbed input x.
             a_perturbed = self.explain_func(
                 model=model.get_model(),
                 inputs=x_input,
-                targets=y,
+                targets=y_batch,
                 **self.explain_func_kwargs,
             )
 
             if self.normalise:
                 a_perturbed = self.normalise_func(
-                    a_perturbed, **self.normalise_func_kwargs
+                    a_perturbed,
+                    **self.normalise_func_kwargs,
                 )
 
             if self.abs:
                 a_perturbed = np.abs(a_perturbed)
 
-            sensitivities = self.similarity_func(a=a.flatten(), b=a_perturbed.flatten())
-            sensitivities_numerator = self.norm_numerator(a=sensitivities)
-            sensitivities_denominator = self.norm_denominator(a=x.flatten())
-            sensitivities_norm = sensitivities_numerator / sensitivities_denominator
+            # Measure similarity for each instance separately.
+            for instance_id in range(n_instances):
+                sensitivities = similarity_func(
+                    a=a_batch[instance_id].flatten(),
+                    b=a_perturbed[instance_id].flatten(),
+                )
+                numerator = norm_numerator(a=sensitivities)
+                denominator = norm_denominator(a=x_batch[instance_id].flatten())
+                sensitivities_norm = numerator / denominator
+                similarities[instance_id, step_id] = sensitivities_norm
 
-            sub_results[sample_idx] = sensitivities_norm
-
-        # Append average sensitivity score.
-        return float(np.mean(sub_results))
+        return np.nanmean(similarities, axis=1)
 
 
 class Continuity(PerturbationMetric):
