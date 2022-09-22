@@ -1,37 +1,37 @@
 """This module holds a collection of similarity functions i..e, ways to measure the distance between two inputs (or explanations)."""
-from typing import Union
+from typing import Callable, Optional
 import scipy
 from sklearn import metrics
 import skimage
 import numpy as np
 
 
-def correlation_spearman(a: np.array, b: np.array, **kwargs) -> float:
+def correlation_spearman(a: np.array, b: np.array) -> float:
     """Calculate Spearman rank of two images (or explanations)."""
     return scipy.stats.spearmanr(a, b)[0]
 
 
-def correlation_pearson(a: np.array, b: np.array, **kwargs) -> float:
+def correlation_pearson(a: np.array, b: np.array) -> float:
     """Calculate Pearson correlation of two images (or explanations)."""
     return scipy.stats.pearsonr(a, b)[0]
 
 
-def correlation_kendall_tau(a: np.array, b: np.array, **kwargs) -> float:
+def correlation_kendall_tau(a: np.array, b: np.array) -> float:
     """Calculate Kendall Tau correlation of two images (or explanations)."""
     return scipy.stats.kendalltau(a, b)[0]
 
 
-def distance_euclidean(a: np.array, b: np.array, **kwargs) -> float:
+def distance_euclidean(a: np.array, b: np.array) -> float:
     """Calculate Euclidean distance of two images (or explanations)."""
     return scipy.spatial.distance.euclidean(u=a, v=b)
 
 
-def distance_manhattan(a: np.array, b: np.array, **kwargs) -> float:
+def distance_manhattan(a: np.array, b: np.array) -> float:
     """Calculate Manhattan distance of two images (or explanations)."""
     return scipy.spatial.distance.cityblock(u=a, v=b)
 
 
-def distance_chebyshev(a: np.array, b: np.array, **kwargs) -> float:
+def distance_chebyshev(a: np.array, b: np.array) -> float:
     """Calculate Chebyshev distance of two images (or explanations)."""
     return scipy.spatial.distance.chebyshev(u=a, v=b)
 
@@ -39,42 +39,44 @@ def distance_chebyshev(a: np.array, b: np.array, **kwargs) -> float:
 def lipschitz_constant(
     a: np.array,
     b: np.array,
-    c: Union[np.array, None],
-    d: Union[np.array, None],
-    **kwargs
+    c: Optional[np.array],
+    d: Optional[np.array],
+    norm_numerator: Optional[Callable],
+    norm_denominator: Optional[Callable],
+    eps: float = 1e-10,
 ) -> float:
     """Calculate non-negative local Lipschitz abs(||a-b||/||c-d||), where a,b can be f(x) or a(x) and c,d is x.
 
     For numerical stability, a small value is added to division."""
-    eps = 1e-10
-
-    d1 = kwargs.get("norm_numerator", distance_manhattan)
-    d2 = kwargs.get("norm_denominator", distance_euclidean)
+    if norm_numerator is None:
+        norm_numerator = distance_manhattan
+    if norm_denominator is None:
+        norm_denominator = distance_euclidean
 
     if np.shape(a) == ():
-        return float(abs(a - b) / (d2(c, d) + eps))
+        return float(abs(a - b) / (norm_denominator(c, d) + eps))
     else:
-        return float(d1(a, b) / (d2(a=c, b=d) + eps))
+        return float(norm_numerator(a, b) / (norm_denominator(a=c, b=d) + eps))
 
 
-def abs_difference(a: np.array, b: np.array, **kwargs) -> float:
+def abs_difference(a: np.array, b: np.array) -> float:
     """Calculate the absolute difference between two images (or explanations)."""
     return np.mean(abs(a - b))
 
 
-def cosine(a: np.array, b: np.array, **kwargs) -> float:
+def cosine(a: np.array, b: np.array) -> float:
     """Calculate Cosine of two images (or explanations)."""
     return scipy.spatial.distance.cosine(u=a, v=b)
 
 
-def ssim(a: np.array, b: np.array, **kwargs) -> float:
+def ssim(a: np.array, b: np.array) -> float:
     """Calculate Structural Similarity Index Measure of two images (or explanations)."""
     return skimage.metrics.structural_similarity(
         im1=a, im2=b, win_size=kwargs.get("win_size", None)
     )
 
 
-def mse(a: np.array, b: np.array, **kwargs) -> float:
+def mse(a: np.array, b: np.array) -> float:
     """Calculate Mean Squared Error between two images (or explanations)."""
     normalise = kwargs.get("normalise", False)
     if normalise:
@@ -84,6 +86,6 @@ def mse(a: np.array, b: np.array, **kwargs) -> float:
     return np.average(((a - b) ** 2), axis=0)
 
 
-def difference(a: np.array, b: np.array, **kwargs) -> float:
+def difference(a: np.array, b: np.array) -> float:
     """Calculate the difference between two images (or explanations)."""
     return a - b
