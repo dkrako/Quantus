@@ -11,32 +11,34 @@ import scipy
 from scipy.sparse import lil_matrix, csc_matrix
 from scipy.sparse.linalg import spsolve
 
-from .utils import (
-    get_baseline_value,
-    blur_at_indices,
-    expand_indices,
-    get_leftover_shape,
-    offset_coordinates,
-)
+from .utils import get_baseline_value
+from .utils import blur_at_indices
+from .utils import expand_indices
+from .utils import get_leftover_shape
+from .utils import offset_coordinates
 
 
-def perturb_batch_on_indices(
-        arr: np.ndarray,
-        indices: np.ndarray,
+def perturb_batch(
         perturb_func: Callable,
+        arr: np.ndarray,
+        indices: np.ndarray = None,
         inplace: bool = False,
         **kwargs,
 ) -> None:
     """ perturbation of complete batch """
-    assert arr.shape[0] == len(indices), (
-        "arr and indices need same number of batches"
-    )
+    if indices is not None:
+        assert arr.shape[0] == len(indices), (
+            "arr and indices need same number of batches"
+        )
 
     if not inplace:
         arr = arr.copy()
 
     for i in range(len(arr)):
-        arr[i] = perturb_func(arr=arr[i], indices=indices[i][1:], **kwargs)
+        if indices is not None:
+            arr[i] = perturb_func(arr=arr[i], indices=indices[i][1:], **kwargs)
+        else:
+            arr[i] = perturb_func(arr=arr[i], **kwargs)
 
     if not inplace:
         return arr
@@ -85,10 +87,7 @@ def baseline_replacement_by_indices(
 
 def baseline_replacement_by_shift(
     arr: np.array,
-    indices: Union[int, Sequence[int], Tuple[np.array]],
-    indexed_axes: Sequence[int],
-    input_shift: Union[float, int, str, np.array],
-    **kwargs,
+    input_shift: int,
 ) -> np.array:
     """
     Shift values at indices in an image.
@@ -101,29 +100,11 @@ def baseline_replacement_by_shift(
                       and either include the first or last dimension of array.
         input_shift: value to shift arr at indices with
     """
-    indices = expand_indices(arr, indices, indexed_axes)
-    baseline_shape = get_leftover_shape(arr, indexed_axes)
-
-    arr_perturbed = copy.copy(arr)
-
-    # Get the baseline value.
-    baseline_value = get_baseline_value(
-        value=input_shift, arr=arr, return_shape=tuple(baseline_shape), **kwargs
-    )
-
     # Shift the input.
-    arr_shifted = copy.copy(arr_perturbed)
-    arr_shifted = np.add(
-        arr_shifted,
-        np.full(
-            shape=arr_shifted.shape,
-            fill_value=np.expand_dims(baseline_value, axis=tuple(indexed_axes)),
-            dtype=float,
-        ),
-    )
+    arr_shifted = copy.copy(arr)
+    arr_shifted = np.add(arr_shifted, input_shift)
 
-    arr_perturbed[indices] = arr_shifted[indices]
-    return arr_perturbed
+    return arr_shifted
 
 
 def baseline_replacement_by_blur(
@@ -131,7 +112,6 @@ def baseline_replacement_by_blur(
     indices: Tuple[np.array],
     indexed_axes: Sequence[int],
     blur_kernel_size: Union[int, Sequence[int]] = 15,
-    **kwargs,
 ) -> np.array:
     """
     Replace array at indices by a blurred version.
@@ -167,11 +147,10 @@ def baseline_replacement_by_blur(
 
 def gaussian_noise(
     arr: np.array,
-    indices: Union[int, Sequence[int], Tuple[np.array]],
-    indexed_axes: Sequence[int],
+    #indices: Union[int, Sequence[int], Tuple[np.array]],
+    #indexed_axes: Sequence[int],
     perturb_mean: float = 0.0,
     perturb_std: float = 0.01,
-    **kwargs,
 ) -> np.array:
     """
     Add gaussian noise to the input at indices.
@@ -186,22 +165,21 @@ def gaussian_noise(
         perturb_std: Std for gaussian
     """
 
-    indices = expand_indices(arr, indices, indexed_axes)
+    #indices = expand_indices(arr, indices, indexed_axes)
     noise = np.random.normal(loc=perturb_mean, scale=perturb_std, size=arr.shape)
 
-    arr_perturbed = copy.copy(arr)
-    arr_perturbed[indices] = (arr_perturbed + noise)[indices]
+    arr_perturbed = arr + noise
+    #arr_perturbed[indices] = (arr_perturbed + noise)[indices]
 
     return arr_perturbed
 
 
 def uniform_noise(
     arr: np.array,
-    indices: Union[int, Sequence[int], Tuple[np.array]],
-    indexed_axes: Sequence[int],
+    #indices: Union[int, Sequence[int], Tuple[np.array]],
+    #indexed_axes: Sequence[int],
     lower_bound: float = 0.02,
     upper_bound: Union[None, float] = None,
-    **kwargs,
 ) -> np.array:
     """
     Add noise to the input at indices as sampled uniformly random from [-lower_bound, lower_bound].
@@ -217,7 +195,7 @@ def uniform_noise(
         upper_bound: upper bound for uniform sampling
     """
 
-    indices = expand_indices(arr, indices, indexed_axes)
+    #indices = expand_indices(arr, indices, indexed_axes)
 
     if upper_bound is None:
         noise = np.random.uniform(low=-lower_bound, high=lower_bound, size=arr.shape)
@@ -228,13 +206,13 @@ def uniform_noise(
         )
         noise = np.random.uniform(low=lower_bound, high=upper_bound, size=arr.shape)
 
-    arr_perturbed = copy.copy(arr)
-    arr_perturbed[indices] = (arr_perturbed + noise)[indices]
+    arr_perturbed = arr + noise
+    #arr_perturbed[indices] = (arr_perturbed + noise)[indices]
 
     return arr_perturbed
 
 
-def rotation(arr: np.array, perturb_angle: float = 10, **kwargs) -> np.array:
+def rotation(arr: np.array, perturb_angle: float = 10) -> np.array:
     """
     Rotate array by some given angle.
     Assumes image type data and channel first layout.
@@ -344,7 +322,6 @@ def noisy_linear_imputation(
     arr: np.array,
     indices: Union[int, Sequence[int], Tuple[np.array]],
     noise: float = 0.01,
-    **kwargs,
 ) -> np.array:
     """
     Based on https://github.com/tleemann/road_evaluation.
@@ -415,6 +392,6 @@ def noisy_linear_imputation(
     return arr_flat_copy.reshape(*arr.shape)
 
 
-def no_perturbation(arr: np.array, **kwargs) -> np.array:
+def no_perturbation(arr: np.array) -> np.array:
     """Apply no perturbation to input."""
     return arr
