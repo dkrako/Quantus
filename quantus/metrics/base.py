@@ -602,8 +602,6 @@ class BatchedMetric(Metric):
                 y_batch=y_batch_,
                 a_batch=a_batch_,
                 s_batch=s_batch_,
-                perturb_func=self.perturb_func,
-                perturb_func_kwargs=self.perturb_func_kwargs,
                 **kwargs,
             )
             self.last_results.extend(result)
@@ -728,7 +726,6 @@ class BatchedPerturbationMetric(BatchedMetric):
         softmax: bool,
         perturb_func: Callable,
         perturb_func_kwargs: Optional[Dict[str, Any]],
-        n_steps: int,
         default_plot_func: Optional[Callable],
         disable_warnings: bool,
         display_progressbar: bool,
@@ -748,7 +745,6 @@ class BatchedPerturbationMetric(BatchedMetric):
             **kwargs,
         )
 
-        self.n_steps = n_steps
         self.perturb_func = perturb_func
 
         if perturb_func_kwargs is None:
@@ -783,6 +779,7 @@ class BatchedPerturbationMetric(BatchedMetric):
             softmax=softmax,
             device=device,
             model_predict_kwargs=model_predict_kwargs,
-            n_steps=self.n_steps,
+            perturb_func=self.perturb_func,
+            perturb_func_kwargs=self.perturb_func_kwargs,
             **kwargs,
         )
