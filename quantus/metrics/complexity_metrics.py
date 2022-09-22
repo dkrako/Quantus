@@ -184,15 +184,13 @@ class Sparseness(Metric):
         a: np.ndarray,
         s: np.ndarray,
     ):
-        a = np.array(
-            np.reshape(a, (np.prod(x.shape[1:]),)),
-            dtype=np.float64,
-        )
+        a = flatten()
         a += 0.0000001
         a = np.sort(a)
-        score = (np.sum((2 * np.arange(1, a.shape[0] + 1) - a.shape[0] - 1) * a)) / (
-            a.shape[0] * np.sum(a)
-        )
+        score = (
+            np.sum(
+                (2 * np.arange(1, a.shape[0] + 1) - a.shape[0] - 1) * a)
+        ) / ( a.shape[0] * np.sum(a) ) # TODO: the denominator differs from formula
         return score
 
 
@@ -361,14 +359,7 @@ class Complexity(Metric):
         a: np.ndarray,
         s: np.ndarray,
     ):
-        a = (
-            np.array(
-                np.reshape(a, (np.prod(x.shape[1:]),)),
-                dtype=np.float64,
-            )
-            / np.sum(np.abs(a))
-        )
-
+        a = a.flatten()
         return scipy.stats.entropy(pk=a)
 
 
@@ -384,6 +375,8 @@ class EffectiveComplexity(Metric):
         interpretability." arXiv preprint arXiv:2007.07584 (2020).
     """
 
+    valid_modes = ['absolute', 'percantage']
+
     @attributes_check
     def __init__(
         self,
@@ -392,6 +385,7 @@ class EffectiveComplexity(Metric):
         normalise: bool = True,
         normalise_func: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         normalise_func_kwargs: Optional[Dict[str, Any]] = None,
+        mode: str = 'absolute',
         softmax: bool = False,
         default_plot_func: Optional[
             Callable
@@ -436,6 +430,10 @@ class EffectiveComplexity(Metric):
 
         # Save metric-specific attributes.
         self.eps = eps
+
+        if mode is not in self.valid_modes:
+            raise ValueError(f"mode must be in {self.valid_modes} but is '{mode}'.")
+        self.mode = mode
 
         # Asserts and warnings.
         if not self.disable_warnings:
@@ -540,4 +538,9 @@ class EffectiveComplexity(Metric):
         s: np.ndarray,
     ):
         a = a.flatten()
-        return int(np.sum(a > self.eps))  # casting to int needed?
+        a_eps_sum = np.sum(a > self.eps))
+
+        if self.mode == 'absolute':
+            return a_eps_sum
+        if self.mode == 'percentage':
+            return a_eps_sum / a.size
