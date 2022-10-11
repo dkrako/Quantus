@@ -256,7 +256,7 @@ class BatchedMetric(Metric):
         for batch_idx in iterator:
             batch_start = batch_size * batch_idx
             batch_end = min(batch_size * (batch_idx + 1), n_instances)
-            batch = tuple(iterable[batch_start:batch_end]  for iterable in iterables)
+            batch = tuple(iterable[batch_start:batch_end] for iterable in iterables)
             yield batch
 
 
