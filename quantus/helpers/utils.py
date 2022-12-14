@@ -750,3 +750,34 @@ def offset_coordinates(indices: list, offset: tuple, img_shape: tuple):
 def calculate_auc(values: np.array, dx: int = 1.0):
     """Calculate area under the curve using the composite trapezoidal rule."""
     return np.trapz(np.array(values), dx=dx)
+
+
+def get_targets(
+        targets: Union[str, np.ndarray],
+        model: ModelInterface,
+        x_batch: np.ndarray,
+        y_batch: np.ndarray,
+):  # TODO: add output type hint
+    valid_target_modes = ["true", "predicted"]
+
+    if not isinstance(targets, str):
+        # TODO: should we check for length?
+        raise NotImplementedError()
+    if targets not in valid_target_modes:
+        raise ValueError(
+            f"target mode {targets} not in valid modes {valid_target_modes}"
+        )
+
+    if targets == "true":
+        targets = y_batch
+    elif targets == "predicted":
+        x_input = model.shape_input(
+            x=x_batch,
+            shape=x_batch.shape,
+            channel_first=True,
+            batched=True,
+        )
+        y_pred = model.predict(x=x_input)
+        targets = np.argmax(y_pred, axis=1)
+
+    return targets

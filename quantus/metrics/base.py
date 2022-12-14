@@ -84,6 +84,7 @@ class Metric:
         y_batch: Optional[np.ndarray],
         a_batch: Optional[np.ndarray],
         s_batch: Optional[np.ndarray],
+        target: Union[str, np.ndarray],
         channel_first: Optional[bool],
         explain_func: Optional[Callable],
         explain_func_kwargs: Optional[Dict[str, Any]],
@@ -161,6 +162,7 @@ class Metric:
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -222,6 +224,7 @@ class Metric:
         y_batch: Optional[np.ndarray],
         a_batch: Optional[np.ndarray],
         s_batch: Optional[np.ndarray],
+        target: Union[str, np.ndarray],
         channel_first: Optional[bool],
         explain_func: Optional[Callable],
         explain_func_kwargs: Optional[Dict[str, Any]],
@@ -269,6 +272,9 @@ class Metric:
         self.explain_func_kwargs = explain_func_kwargs
 
         if a_batch is None:
+
+            if target != 'true':
+                raise NotImplementedError()
 
             # Asserts.
             asserts.assert_explain_func(explain_func=self.explain_func)
@@ -496,6 +502,7 @@ class BatchedMetric(Metric):
         y_batch: Optional[np.ndarray],
         a_batch: Optional[np.ndarray],
         s_batch: Optional[np.ndarray],
+        target: Union[str, np.ndarray],
         channel_first: Optional[bool],
         explain_func: Optional[Callable],
         explain_func_kwargs: Optional[Dict[str, Any]],
@@ -575,6 +582,7 @@ class BatchedMetric(Metric):
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -602,6 +610,7 @@ class BatchedMetric(Metric):
                 y_batch=y_batch_,
                 a_batch=a_batch_,
                 s_batch=s_batch_,
+                target=target,
                 **kwargs,
             )
             self.last_results.extend(result)
@@ -624,7 +633,8 @@ class BatchedMetric(Metric):
             x_batch: np.ndarray,
             y_batch: np.ndarray,
             a_batch: np.ndarray,
-            s_batch: Optional[np.ndarray] = None,
+            s_batch: Optional[np.ndarray],
+            target: Union[str, np.ndarray],
             **kwargs,
     ):
         raise NotImplementedError()

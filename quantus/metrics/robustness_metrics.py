@@ -155,6 +155,7 @@ class LocalLipschitzEstimate(BatchedPerturbationMetric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        target: Union[str, np.ndarray] = 'true',
         batch_size: int = 64,
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
@@ -220,6 +221,7 @@ class LocalLipschitzEstimate(BatchedPerturbationMetric):
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -241,6 +243,7 @@ class LocalLipschitzEstimate(BatchedPerturbationMetric):
             y_batch: np.ndarray,
             a_batch: np.ndarray,
             s_batch: Optional[np.ndarray],
+            target: Union[str, np.ndarray],
             perturb_func: Callable,
             perturb_func_kwargs: Optional[Dict],
             nr_samples: int,
@@ -250,6 +253,14 @@ class LocalLipschitzEstimate(BatchedPerturbationMetric):
     ):
         n_instances = x_batch.shape[0]
         similarities = np.zeros((n_instances, nr_samples)) * np.nan
+
+        targets = utils.get_targets(
+            targets=target,
+            model=model,
+            x_batch=x_batch,
+            y_batch=y_batch,
+        )
+
         for step_id in range(nr_samples):
 
             # Perturb input.
@@ -270,7 +281,7 @@ class LocalLipschitzEstimate(BatchedPerturbationMetric):
             a_perturbed = self.explain_func(
                 model=model.get_model(),
                 inputs=x_input,
-                targets=y_batch,
+                targets=targets,
                 **self.explain_func_kwargs,
             )
 
@@ -391,8 +402,8 @@ class MaxSensitivity(BatchedPerturbationMetric):
 
         if perturb_func_kwargs is None:
             perturb_func_kwargs = {}
-        perturb_func_kwargs["lower_bound"] = lower_bound
-        perturb_func_kwargs["upper_bound"] = upper_bound
+            perturb_func_kwargs["lower_bound"] = lower_bound
+            perturb_func_kwargs["upper_bound"] = upper_bound
 
         super().__init__(
             abs=abs,
@@ -448,6 +459,7 @@ class MaxSensitivity(BatchedPerturbationMetric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        target: Union[str, np.ndarray] = 'true',
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
         explain_func_kwargs: Optional[Dict[str, Any]] = None,
@@ -513,6 +525,7 @@ class MaxSensitivity(BatchedPerturbationMetric):
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -534,6 +547,7 @@ class MaxSensitivity(BatchedPerturbationMetric):
             y_batch: np.ndarray,
             a_batch: np.ndarray,
             s_batch: Optional[np.ndarray],
+            target: Union[str, np.ndarray],
             perturb_func: Callable,
             perturb_func_kwargs: Optional[Dict],
             nr_samples: int,
@@ -543,6 +557,14 @@ class MaxSensitivity(BatchedPerturbationMetric):
     ):
         n_instances = x_batch.shape[0]
         similarities = np.zeros((n_instances, nr_samples)) * np.nan
+
+        targets = utils.get_targets(
+            targets=target,
+            model=model,
+            x_batch=x_batch,
+            y_batch=y_batch,
+        )
+
         for step_id in range(nr_samples):
 
             # Perturb input.
@@ -563,7 +585,7 @@ class MaxSensitivity(BatchedPerturbationMetric):
             a_perturbed = self.explain_func(
                 model=model.get_model(),
                 inputs=x_input,
-                targets=y_batch,
+                targets=targets,
                 **self.explain_func_kwargs,
             )
 
@@ -738,6 +760,7 @@ class AvgSensitivity(BatchedPerturbationMetric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        target: Union[str, np.ndarray] = 'true',
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
         explain_func_kwargs: Optional[Dict[str, Any]] = None,
@@ -797,13 +820,13 @@ class AvgSensitivity(BatchedPerturbationMetric):
         >> metric = AvgSensitivity(abs=True, normalise=False)
         >> scores = metric(model=model, x_batch=x_batch, y_batch=y_batch, a_batch=a_batch_saliency)
         """
-
         return super().__call__(
             model=model,
             x_batch=x_batch,
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -824,6 +847,7 @@ class AvgSensitivity(BatchedPerturbationMetric):
             y_batch: np.ndarray,
             a_batch: np.ndarray,
             s_batch: Optional[np.ndarray],
+            target: Union[str, np.ndarray],
             perturb_func: Callable,
             perturb_func_kwargs: Optional[Dict],
             nr_samples: int,
@@ -833,6 +857,14 @@ class AvgSensitivity(BatchedPerturbationMetric):
     ):
         n_instances = x_batch.shape[0]
         similarities = np.zeros((n_instances, nr_samples)) * np.nan
+
+        targets = utils.get_targets(
+            targets=target,
+            model=model,
+            x_batch=x_batch,
+            y_batch=y_batch,
+        )
+
         for step_id in range(nr_samples):
 
             # Perturb input.
@@ -853,7 +885,7 @@ class AvgSensitivity(BatchedPerturbationMetric):
             a_perturbed = self.explain_func(
                 model=model.get_model(),
                 inputs=x_input,
-                targets=y_batch,
+                targets=targets,
                 **self.explain_func_kwargs,
             )
 

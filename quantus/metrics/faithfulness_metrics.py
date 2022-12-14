@@ -1574,7 +1574,8 @@ class RegionPerturbation(BatchedPerturbationMetric):
         self,
         patch_size: int = 8,
         order: str = "morf",
-        n_steps: int = 100,
+        n_steps: Union[int, float] = 100,
+        regions_per_step: int = 1,
         abs: bool = False,
         normalise: bool = True,
         normalise_func: Optional[Callable[[np.ndarray], np.ndarray]] = None,
@@ -1640,6 +1641,7 @@ class RegionPerturbation(BatchedPerturbationMetric):
 
         # Save metric-specific attributes.
         self.n_steps = n_steps
+        self.regions_per_step = regions_per_step
         self.patch_size = patch_size
         self.order = order.lower()
 
@@ -1667,6 +1669,7 @@ class RegionPerturbation(BatchedPerturbationMetric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        target: Union[str, np.ndarray] = "true",
         batch_size: int = 64,
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
@@ -1727,12 +1730,22 @@ class RegionPerturbation(BatchedPerturbationMetric):
         >> metric = RegionPerturbation(abs=False, normalise=False)
         >> scores = metric(model=model, x_batch=x_batch, y_batch=y_batch, a_batch=a_batch_saliency)
         """
+
+        #if isinstance(self.n_steps, int):
+        #    n_steps = self.n_steps
+        #elif isinstance(self.n_steps, float):
+        #    # TODO: this won't work for 2d input, only for timeseries
+        #    n_steps = match.ceil(x_batch[0].size / self.patch_size * self.n_steps)
+        #else:
+        #    raise ValueError(f"{self.n_steps}, {type(self.n_steps)}")
+
         return super().__call__(
             model=model,
             x_batch=x_batch,
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -1741,6 +1754,7 @@ class RegionPerturbation(BatchedPerturbationMetric):
             model_predict_kwargs=model_predict_kwargs,
             batch_size=batch_size,
             n_steps=self.n_steps,
+            regions_per_step=self.regions_per_step,
             patch_size=self.patch_size,
             order=self.order,
             **kwargs,
@@ -1753,9 +1767,11 @@ class RegionPerturbation(BatchedPerturbationMetric):
             y_batch: np.ndarray,
             a_batch: np.ndarray,
             s_batch: Optional[np.ndarray],
+            target: Union[str, np.ndarray],
             perturb_func: Callable,
             perturb_func_kwargs: Optional[Dict],
             n_steps: int,
+            regions_per_step: int,
             patch_size: int,
             order: str,
     ):
@@ -1765,9 +1781,17 @@ class RegionPerturbation(BatchedPerturbationMetric):
         if perturb_func_kwargs is None:
             perturb_func_kwargs = {}
 
+        targets = utils.get_targets(
+            targets=target,
+            model=model,
+            x_batch=x_batch,
+            y_batch=y_batch,
+        )
+
         # create array for scores of each perturbation step
         batch_size = x_batch.shape[0]
-        scores = np.zeros((batch_size, n_steps)) * np.nan
+        # TODO: add switch to add 0th-step or not
+        scores = np.zeros((batch_size, n_steps + 1)) * np.nan
 
         # Predict on original unperturbed input x.
         # TODO: do this only if difference-flag is True
@@ -1784,6 +1808,7 @@ class RegionPerturbation(BatchedPerturbationMetric):
             x_batch=x_batch,
             a_batch=a_batch,
             n_steps=n_steps,
+            regions_per_step=regions_per_step,
             patch_size=patch_size,
             order=order,
             perturb_func=perturb_func,
@@ -1803,22 +1828,22 @@ class RegionPerturbation(BatchedPerturbationMetric):
             y_batch_pred_perturb = model.predict(x=x_perturb)
 
             scores[:, step] = self.calculate_score(
-                y_batch=y_batch,
                 y_batch_pred=y_batch_pred,
                 y_batch_pred_perturb=y_batch_pred_perturb,
+                targets=targets,
             )
 
         return scores
 
-    def calculate_score(self, y_batch, y_batch_pred, y_batch_pred_perturb):
-        n_instances = y_batch.shape[0]
+    def calculate_score(self, y_batch_pred, y_batch_pred_perturb, targets):
+        n_instances = y_batch_pred.shape[0]
         score = np.zeros(n_instances) * np.nan
 
         # TODO: get rid of for loop
-        iterator = zip(y_batch, y_batch_pred_perturb)
-        for ix, (y, y_pred_perturb) in enumerate(iterator):
-            y_pred_perturb = float(y_pred_perturb[y])
-            y_pred = float(y_batch_pred[ix, y])
+        iterator = zip(targets, y_batch_pred_perturb, )
+        for ix, (target, y_pred_perturb) in enumerate(iterator):
+            y_pred_perturb = float(y_pred_perturb[target])
+            y_pred = float(y_batch_pred[ix, target])
             # TODO: flag difference output
             #score[ix] = y_pred - y_pred_perturb
             score[ix] = y_pred_perturb
@@ -1829,6 +1854,7 @@ class RegionPerturbation(BatchedPerturbationMetric):
             x_batch: np.ndarray,
             a_batch: np.ndarray,
             n_steps: int,
+            regions_per_step: int,
             patch_size: int,
             order: str,
             perturb_func: Callable,
@@ -1840,7 +1866,7 @@ class RegionPerturbation(BatchedPerturbationMetric):
             a_batch=a_batch,
             patch_size=patch_size,
             order=order,
-            max_patches=n_steps,
+            max_patches=n_steps * regions_per_step,
             overlapping=False,
             return_indices=False,
         )
@@ -1850,14 +1876,14 @@ class RegionPerturbation(BatchedPerturbationMetric):
         # Increasingly perturb the input and store the decrease in function value.
         x_batch_perturbed = x_batch.copy()
         x_batch_perturbed_last = x_batch_perturbed.copy()
-        for step in range(n_steps):
 
-            # Select patches of current step for each instance in batch.
-            # TODO: There will be an IndexError raised if there's an instance for which
-            # there are less patches available than desired steps. Decide what to do then.
-            patches_batch_step = [
-                patches_instance[step] for patches_instance in patches_batch
-            ]
+        # first step is no perturbation at all.
+        # TODO: add switch for this, people might not want that
+        yield x_batch_perturbed
+
+        current_patch_id = 0
+
+        for step in range(n_steps):
             # Pad x_perturbed. The mode should probably depend on the used perturb_func?
             pad_width = patch_size - 1
             padded_axes = list(range(2, x_batch.ndim))
@@ -1876,11 +1902,21 @@ class RegionPerturbation(BatchedPerturbationMetric):
             #        patch_batch_mask[patch_coord] = True
             #patch_batch_indices = np.where(patch_batch_mask)
 
-            # create indices from patch
+            # We apply as many patch perturbations as required.
+            for _ in range(regions_per_step):
 
-            '''
-            patches_indices_batch = []
-            for instance_id, patch in enumerate(patches_batch_step):
+                # Select patches of current step for each instance in batch.
+                # TODO: There will be an IndexError raised if there's an instance for which
+                # there are less patches available than desired steps. Decide what to do then.
+                current_patches_batch = [
+                    patches_instance[current_patch_id] for patches_instance in patches_batch
+                ]
+
+                # create indices from patch
+
+                '''
+                patches_indices_batch = []
+                for instance_id, patch in enumerate(patches_batch_step):
                 patch_instance_mask = np.zeros(x_perturbed_pad[0].shape, dtype=bool)
 
                 # TODO: do this more efficiently
@@ -1890,20 +1926,22 @@ class RegionPerturbation(BatchedPerturbationMetric):
 
                 patch_instance_indices = np.where(patch_instance_mask)
                 patches_indices_batch.append(patch_instance_indices)
-            '''
+                '''
 
-            #patches_batch_step = [(slice(None), *patch[1:]) for patch in patches_batch_step]
+                #patches_batch_step = [(slice(None), *patch[1:]) for patch in patches_batch_step]
 
-            # Perturb complete batch inplace.
-            x_perturbed_pad = perturb_batch(
-                arr=x_perturbed_pad,
-                indices=patches_batch_step,
-                perturb_func=perturb_func,
-                indexed_axes=list(range(0, x_batch.ndim-1)),
-                expand=False,
-                patch_shape=patch_shape,
-                **perturb_func_kwargs,
-            )
+                # Perturb complete batch inplace.
+                x_perturbed_pad = perturb_batch(
+                    arr=x_perturbed_pad,
+                    indices=current_patches_batch,
+                    perturb_func=perturb_func,
+                    indexed_axes=list(range(0, x_batch.ndim-1)),
+                    expand=False,
+                    patch_shape=patch_shape,
+                    **perturb_func_kwargs,
+                )
+
+                current_patch_id += 1
 
             # Remove Padding
             x_batch_perturbed = utils._unpad_array(

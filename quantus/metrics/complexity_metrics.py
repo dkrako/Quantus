@@ -1,4 +1,5 @@
 """This module contains the collection of complexity metrics to evaluate attribution-based explanations of neural network models."""
+from numbers import Number
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -103,6 +104,7 @@ class Sparseness(Metric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        target: Union[str, np.ndarray] = "true",
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
         explain_func_kwargs: Optional[Dict[str, Any]] = None,
@@ -167,6 +169,7 @@ class Sparseness(Metric):
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -184,7 +187,7 @@ class Sparseness(Metric):
         a: np.ndarray,
         s: np.ndarray,
     ):
-        a = flatten()
+        a = a.flatten()
         a += 0.0000001
         a = np.sort(a)
         score = (
@@ -278,6 +281,7 @@ class Complexity(Metric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        target: Union[str, np.ndarray] = "true",
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
         explain_func_kwargs: Optional[Dict[str, Any]] = None,
@@ -342,6 +346,7 @@ class Complexity(Metric):
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -429,9 +434,13 @@ class EffectiveComplexity(Metric):
         )
 
         # Save metric-specific attributes.
+
+
+        if isinstance(eps, Number):
+            eps = [eps]
         self.eps = eps
 
-        if mode is not in self.valid_modes:
+        if mode not in self.valid_modes:
             raise ValueError(f"mode must be in {self.valid_modes} but is '{mode}'.")
         self.mode = mode
 
@@ -456,6 +465,7 @@ class EffectiveComplexity(Metric):
         y_batch: np.array,
         a_batch: Optional[np.ndarray] = None,
         s_batch: Optional[np.ndarray] = None,
+        target: Union[str, np.ndarray] = "true",
         channel_first: Optional[bool] = None,
         explain_func: Optional[Callable] = None,  # Specify function signature
         explain_func_kwargs: Optional[Dict[str, Any]] = None,
@@ -520,6 +530,7 @@ class EffectiveComplexity(Metric):
             y_batch=y_batch,
             a_batch=a_batch,
             s_batch=s_batch,
+            target=target,
             channel_first=channel_first,
             explain_func=explain_func,
             explain_func_kwargs=explain_func_kwargs,
@@ -537,10 +548,15 @@ class EffectiveComplexity(Metric):
         a: np.ndarray,
         s: np.ndarray,
     ):
-        a = a.flatten()
-        a_eps_sum = np.sum(a > self.eps))
+        a_eps_sums = np.ones(len(self.eps)) * np.nan
 
-        if self.mode == 'absolute':
-            return a_eps_sum
-        if self.mode == 'percentage':
-            return a_eps_sum / a.size
+        for eps_id, this_eps in enumerate(self.eps):
+            a = a.flatten()
+            a_eps_sum = np.sum(a > this_eps)
+
+            if self.mode == 'absolute':
+                a_eps_sums[eps_id] = a_eps_sum
+            if self.mode == 'percentage':
+                a_eps_sums[eps_id] = a_eps_sum / a.size
+
+        return a_eps_sums
